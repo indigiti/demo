@@ -1,0 +1,17 @@
+{
+  "name": "Daily Horoscope",
+  "short_name": "Horoscope",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#080f25",
+  "theme_color": "#080f25",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

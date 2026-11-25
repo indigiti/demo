@@ -49,11 +49,14 @@ jobs:
               target.write_text(html, encoding='utf-8')
           for folder in [public, nested]:
               shutil.copyfile('/tmp/demo-astro/package/astronomy.browser.min.js', folder / 'astronomy.browser.min.js')
+              for asset in ['manifest.webmanifest','icon.svg']:
+                  shutil.copyfile(source.parent / asset, folder / asset)
+              (folder / 'sw.js').write_text((source.parent / 'sw.js').read_text(encoding='utf-8').replace('__SOURCE_SHA__', os.environ['GITHUB_SHA']), encoding='utf-8')
           (public / 'STAGING_ONLY.txt').write_text('Daily Horoscope interface demo. All interpretations, scores and lucky attributes are illustrative. Local Astronomy Engine calculations with approximate sidereal offset; not independently validated. No private runtime or database.\n', encoding='utf-8')
           (public / '.htaccess').write_text('DirectoryIndex index.html\n<IfModule mod_headers.c>\n  Header always set X-Robots-Tag "noindex, nofollow, noarchive"\n  Header always set X-Content-Type-Options "nosniff"\n</IfModule>\n', encoding='utf-8')
           metadata = {
               'schema': 'DIGIOPS-BUILD/1', 'name': 'Demo',
-              'version': '0.2-staging', 'public': 'public', 'path': '/demo/',
+              'version': '0.3-staging', 'public': 'public', 'path': '/demo/',
               'dataMode': 'mock', 'private': None,
               'branch': os.environ['GITHUB_REF_NAME'], 'sourceSha': os.environ['GITHUB_SHA'],
               'ciRunId': os.environ['GITHUB_RUN_ID'], 'ciRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -97,6 +100,22 @@ jobs:
           test -f release/public/.htaccess
           test -f release/RELEASE.json
           test ! -e release/public/RELEASE.json
+          curl --fail --silent http://127.0.0.1:8765/demo/astronomy.browser.min.js -o /tmp/demo-astro-check.js
+          cmp release/public/astronomy.browser.min.js /tmp/demo-astro-check.js
+          node --check release/public/sw.js
+          python3 -m json.tool release/public/manifest.webmanifest >/dev/null
+      - name: Browser smoke test on desktop and mobile
+        run: |
+          set -euo pipefail
+          npm install --prefix /tmp/demo-test --no-audit --no-fund --no-save playwright@1.51.1
+          /tmp/demo-test/node_modules/.bin/playwright install --with-deps chromium
+          mkdir -p /tmp/demo-browser-web
+          ln -s "$PWD/release/public" /tmp/demo-browser-web/demo
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory /tmp/demo-browser-web >/tmp/demo-browser.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for i in {1..20}; do if curl --fail --silent http://127.0.0.1:8765/demo/ >/dev/null; then break; fi; sleep 1; done
+          node 'Daily Horoscope/browser-test.cjs'
       - name: Upload DigiOps release
         uses: actions/upload-artifact@v4
         with:
