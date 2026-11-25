@@ -14,6 +14,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Bundle pinned Astronomy Engine for local browser calculations
+        run: |
+          npm pack astronomy-engine@2.1.19 --pack-destination /tmp
+          mkdir -p /tmp/demo-astro
+          tar -xzf /tmp/astronomy-engine-2.1.19.tgz -C /tmp/demo-astro
+          test -s /tmp/demo-astro/package/astronomy.browser.min.js
       - name: Validate and assemble static DigiOps payload
         shell: bash
         run: |
@@ -21,7 +27,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           from datetime import datetime, timezone
-          import json, os, re
+          import json, os, re, shutil
           source = Path('Daily Horoscope/index.html')
           html = source.read_text(encoding='utf-8')
           assert '<!doctype html>' in html.lower()
@@ -41,11 +47,13 @@ jobs:
           html = html.replace('<meta name="theme-color"', '<meta name="robots" content="noindex,nofollow,noarchive"><meta name="theme-color"', 1)
           for target in [public / 'index.html', nested / 'index.html']:
               target.write_text(html, encoding='utf-8')
-          (public / 'STAGING_ONLY.txt').write_text('Daily Horoscope interface demo. All interpretations, scores and lucky attributes are illustrative. No live ephemeris, private runtime or database.\n', encoding='utf-8')
+          for folder in [public, nested]:
+              shutil.copyfile('/tmp/demo-astro/package/astronomy.browser.min.js', folder / 'astronomy.browser.min.js')
+          (public / 'STAGING_ONLY.txt').write_text('Daily Horoscope interface demo. All interpretations, scores and lucky attributes are illustrative. Local Astronomy Engine calculations with approximate sidereal offset; not independently validated. No private runtime or database.\n', encoding='utf-8')
           (public / '.htaccess').write_text('DirectoryIndex index.html\n<IfModule mod_headers.c>\n  Header always set X-Robots-Tag "noindex, nofollow, noarchive"\n  Header always set X-Content-Type-Options "nosniff"\n</IfModule>\n', encoding='utf-8')
           metadata = {
               'schema': 'DIGIOPS-BUILD/1', 'name': 'Demo',
-              'version': '0.1-staging', 'public': 'public', 'path': '/demo/',
+              'version': '0.2-staging', 'public': 'public', 'path': '/demo/',
               'dataMode': 'mock', 'private': None,
               'branch': os.environ['GITHUB_REF_NAME'], 'sourceSha': os.environ['GITHUB_SHA'],
               'ciRunId': os.environ['GITHUB_RUN_ID'], 'ciRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -58,6 +66,18 @@ jobs:
           print(json.dumps(metadata, indent=2))
           PY
           node --check /tmp/demo-horoscope.js
+          node - <<'JS'
+          const A=require("/tmp/demo-astro/package/astronomy.js");
+          const assert=require("node:assert/strict");
+          const d=new Date("2026-11-25T00:00:00+05:30");
+          const o=new A.Observer(18.5204,73.8567,0);
+          const r=A.SearchRiseSet(A.Body.Sun,o,1,d,1),s=A.SearchRiseSet(A.Body.Sun,o,-1,d,1);
+          assert(r && s && r.date < s.date);
+          assert(Number.isFinite(A.EclipticGeoMoon(r.date).lon));
+          assert(Number.isFinite(A.SunPosition(r.date).elon));
+          assert(Number.isFinite(A.Ecliptic(A.GeoVector(A.Body.Mars,r.date,true)).elon));
+          assert(A.SearchMoonPhase(0,d,31));
+          JS
       - name: Verify HTTP entrypoints under deployment prefix
         shell: bash
         run: |
