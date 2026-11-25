@@ -1,0 +1,87 @@
+name: Demo DigiOps release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: demo-release-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and assemble static DigiOps payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from datetime import datetime, timezone
+          import json, os, re
+          source = Path('Daily Horoscope/index.html')
+          html = source.read_text(encoding='utf-8')
+          assert '<!doctype html>' in html.lower()
+          assert 'DESIGN DEMO' in html
+          assert 'Asia/Kolkata' in html
+          for sign in ['aries','taurus','gemini','cancer','leo','virgo','libra','scorpio','sagittarius','capricorn','aquarius','pisces']:
+              assert "['" + sign + "'," in html, sign
+          for lang in ['en','mr','hi']:
+              assert lang + ':{brand:' in html, lang
+          script = re.search(r'<script>(.*?)</script>', html, re.S)
+          assert script, 'Missing app script'
+          Path('/tmp/demo-horoscope.js').write_text(script.group(1), encoding='utf-8')
+          release = Path('release')
+          public = release / 'public'
+          nested = public / 'daily-horoscope'
+          nested.mkdir(parents=True, exist_ok=False)
+          html = html.replace('<meta name="theme-color"', '<meta name="robots" content="noindex,nofollow,noarchive"><meta name="theme-color"', 1)
+          for target in [public / 'index.html', nested / 'index.html']:
+              target.write_text(html, encoding='utf-8')
+          (public / 'STAGING_ONLY.txt').write_text('Daily Horoscope interface demo. All interpretations, scores and lucky attributes are illustrative. No live ephemeris, private runtime or database.\n', encoding='utf-8')
+          (public / '.htaccess').write_text('DirectoryIndex index.html\n<IfModule mod_headers.c>\n  Header always set X-Robots-Tag "noindex, nofollow, noarchive"\n  Header always set X-Content-Type-Options "nosniff"\n</IfModule>\n', encoding='utf-8')
+          metadata = {
+              'schema': 'DIGIOPS-BUILD/1', 'name': 'Demo',
+              'version': '0.1-staging', 'public': 'public', 'path': '/demo/',
+              'dataMode': 'mock', 'private': None,
+              'branch': os.environ['GITHUB_REF_NAME'], 'sourceSha': os.environ['GITHUB_SHA'],
+              'ciRunId': os.environ['GITHUB_RUN_ID'], 'ciRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'builtAt': datetime.now(timezone.utc).isoformat(),
+          }
+          assert re.fullmatch(r'[0-9a-f]{40}', metadata['sourceSha'])
+          (release / 'RELEASE.json').write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
+          assert (public / 'index.html').read_bytes() == (nested / 'index.html').read_bytes()
+          assert not (release / 'private').exists()
+          print(json.dumps(metadata, indent=2))
+          PY
+          node --check /tmp/demo-horoscope.js
+      - name: Verify HTTP entrypoints under deployment prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/demo-web
+          ln -s "$PWD/release/public" /tmp/demo-web/demo
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory /tmp/demo-web >/tmp/demo-http.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for i in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:8765/demo/ -o /tmp/demo-root.html; then break; fi
+            sleep 1
+          done
+          curl --fail --silent --show-error http://127.0.0.1:8765/demo/daily-horoscope/ -o /tmp/demo-nested.html
+          cmp release/public/index.html /tmp/demo-root.html
+          cmp release/public/daily-horoscope/index.html /tmp/demo-nested.html
+          test -f release/public/.htaccess
+          test -f release/RELEASE.json
+          test ! -e release/public/RELEASE.json
+      - name: Upload DigiOps release
+        uses: actions/upload-artifact@v4
+        with:
+          name: digiops-release
+          path: release/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
